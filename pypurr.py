@@ -4,9 +4,12 @@ import threading
 import time
 import pygame
 
-from typing import Any, Callable, SupportsFloat
+from typing import Any, Callable, SupportsFloat, TypeAlias, Literal
 from pygamewrapper import PygameSpriteWrapper
 from constants import *
+
+
+_main_sync = threading.Event()
 
 
 class BlockManager:
@@ -15,7 +18,6 @@ class BlockManager:
 
         self.do_block = True
         self._previous_block_location: set[tuple[str, int]] = set()
-        self._previous_block_time: float = _clock.get_time() / 1000
 
     @staticmethod
     def _find_caller() -> tuple[str, int] | None:
@@ -35,7 +37,7 @@ class BlockManager:
         In the future, this might be implemented by patching the calling code directly.
         """
 
-        if not self.do_block:
+        if not self.do_block or threading.current_thread() == threading.main_thread():
             return
 
         caller = self._find_caller()
@@ -44,11 +46,7 @@ class BlockManager:
 
             self._previous_block_location = set()
 
-            dt = runtime() - self._previous_block_time
-            if dt < 1 / frame_rate:
-                wait(1 / frame_rate - dt)
-
-            self._previous_block_time = runtime()
+            _main_sync.wait()
 
         self._previous_block_location.add(caller)
 
@@ -262,6 +260,42 @@ def pick_random(start: SupportsFloat, end: SupportsFloat) -> float:
     return random.random() * (float(end) - float(start)) + float(start)
 
 
+def mouse_x() -> int:
+    return pygame.mouse.get_pos()[0] - size[0] / 2
+
+
+def mouse_y() -> int:
+    return pygame.mouse.get_pos()[1] - size[1] / 2
+
+
+Key: TypeAlias = Literal[
+    'a', 'b', 'c', 'd', 'e',
+    'f', 'g', 'h', 'i', 'j',
+    'k', 'l', 'm', 'n', 'o',
+    'p', 'q', 'r', 's', 't',
+    'u', 'v', 'w', 'x', 'y',
+    'z', 'space',
+    '0', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9',
+    'left', 'right', 'up', 'down'
+]
+
+
+def key_pressed(k: Key) -> bool:
+    blocking_call()
+    return k in _keys_down_active
+
+
+def key_down(k: Key) -> bool:
+    blocking_call()
+    return k in _keys_just_down_active
+
+
+def key_up(k: Key) -> bool:
+    blocking_call()
+    return k in _keys_just_up_active
+
+
 def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
 
     def inner():
@@ -280,6 +314,89 @@ def _scratch_call_hook(s: Sprite, n: str):
 
 _clock: pygame.time.Clock
 _sys_start_time: float
+
+_keys_just_down: set[Key] = set()
+_keys_just_up: set[Key] = set()
+_keys_down: set[Key] = set()
+
+_keys_down_active: set[Key] = set()
+_keys_just_down_active: set[Key] = set()
+_keys_just_up_active: set[Key] = set()
+
+
+def pygame_key(k: int) -> Key:
+    match k:
+        # Numeric keys
+        case pygame.K_0: return '0'
+        case pygame.K_1: return '1'
+        case pygame.K_2: return '2'
+        case pygame.K_3: return '3'
+        case pygame.K_4: return '4'
+        case pygame.K_5: return '5'
+        case pygame.K_6: return '6'
+        case pygame.K_7: return '7'
+        case pygame.K_8: return '8'
+        case pygame.K_9: return '9'
+
+        # Characters
+        case pygame.K_a: return 'a'
+        case pygame.K_b: return 'b'
+        case pygame.K_c: return 'c'
+        case pygame.K_d: return 'd'
+        case pygame.K_e: return 'e'
+        case pygame.K_f: return 'f'
+        case pygame.K_g: return 'g'
+        case pygame.K_h: return 'h'
+        case pygame.K_i: return 'i'
+        case pygame.K_j: return 'j'
+        case pygame.K_k: return 'k'
+        case pygame.K_l: return 'l'
+        case pygame.K_m: return 'm'
+        case pygame.K_n: return 'n'
+        case pygame.K_o: return 'o'
+        case pygame.K_p: return 'p'
+        case pygame.K_q: return 'q'
+        case pygame.K_r: return 'r'
+        case pygame.K_s: return 's'
+        case pygame.K_t: return 't'
+        case pygame.K_u: return 'u'
+        case pygame.K_v: return 'v'
+        case pygame.K_w: return 'w'
+        case pygame.K_x: return 'x'
+        case pygame.K_y: return 'y'
+        case pygame.K_z: return 'z'
+
+        # Special
+        case pygame.K_SPACE: return 'space'
+        case pygame.K_LEFT:  return 'left'
+        case pygame.K_RIGHT: return 'right'
+        case pygame.K_UP:    return 'up'
+        case pygame.K_DOWN:  return 'down'
+
+
+def handle_event(ev: pygame.event.Event):
+    if ev.type == pygame.KEYDOWN:
+        _keys_just_down.add(pygame_key(ev.key))
+    elif ev.type == pygame.KEYUP:
+        _keys_just_up.add(pygame_key(ev.key))
+
+
+def start_events():
+    global _keys_just_up, _keys_just_down
+
+    _keys_just_up = set()
+    _keys_just_down = set()
+
+
+def finalize_events():
+    global _keys_down, _keys_down_active, _keys_just_down_active, _keys_just_up_active
+
+    _keys_down.difference_update(_keys_just_up)
+    _keys_down.update(_keys_just_down)
+
+    _keys_down_active = set(_keys_down)
+    _keys_just_down_active = set(_keys_just_down)
+    _keys_just_up_active = set(_keys_just_up)
 
 
 def runtime() -> float:
@@ -317,10 +434,20 @@ def run():
 
     while True:
         events = pygame.event.get()
+        start_events()
+
         for e in events:
+
             if e.type == pygame.QUIT:
                 pygame.quit()
                 return
+
+            handle_event(e)
+
+        finalize_events()
+
+        _main_sync.set()
+        _main_sync.clear()
 
         sprite_group.update()
         screen.fill((0, 0, 0))
