@@ -235,6 +235,10 @@ def synchronous(f: Callable[[Sprite], None]) -> Callable[[Sprite], None]:
 
         current_blocker().do_block = prev
 
+        blocking_call()
+        # ironically, we must block after performing synchronous code to
+        # ensure a valid program state
+
     return inner
 
 
