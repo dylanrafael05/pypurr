@@ -14,11 +14,15 @@ from constants import *
 ###############################
 # Pygame Interface
 ###############################
-class PygameSpriteWrapper(pygame.sprite.Sprite):
+class _PygameSpriteWrapper(pygame.sprite.Sprite):
 
     @staticmethod
     def to_py_pos(pos: pygame.Vector2) -> pygame.Vector2:
         return pygame.Vector2(pos.x + size[0] / 2, -pos.y + size[1] / 2)
+
+    @staticmethod
+    def to_purr_pos(pos: pygame.Vector2) -> pygame.Vector2:
+        return pygame.Vector2(pos.x - size[0] / 2, -pos.y + size[1] / 2)
 
     def __init__(self, costumes: list[str]):
 
@@ -36,13 +40,14 @@ class PygameSpriteWrapper(pygame.sprite.Sprite):
 
         self._current_costume_image = self._costume_images[self._costume_index]
         self.image = self._current_costume_image
+        self.mask = pygame.mask.from_surface(self.image)
 
         self._scale: float = 100
 
         self.pos = pygame.Vector2(0, 0)
         self.dir: float = 90
 
-        self.rect = self.image.get_rect(center=PygameSpriteWrapper.to_py_pos(self.pos))
+        self.rect = self.image.get_rect(center=_PygameSpriteWrapper.to_py_pos(self.pos))
 
     @property
     def scale(self) -> float:
@@ -96,9 +101,11 @@ class PygameSpriteWrapper(pygame.sprite.Sprite):
         sz = self._current_costume_image.get_size()
         scale = pygame.transform.scale(self._current_costume_image,
                                        (sz[0] * self.scale / 100, sz[1] * self.scale / 100))
-        self.image = pygame.transform.rotate(scale, self.dir - 90)
 
-        self.rect = self.image.get_rect(center=PygameSpriteWrapper.to_py_pos(self.pos))
+        self.image = pygame.transform.rotate(scale, self.dir - 90)
+        self.mask = pygame.mask.from_surface(self.image)
+
+        self.rect = self.image.get_rect(center=_PygameSpriteWrapper.to_py_pos(self.pos))
 
 #########################################
 # User interface
@@ -115,7 +122,7 @@ class SpriteBase:
         self.costumes = costumes
         self.sounds = sounds
 
-        self._sprite = PygameSpriteWrapper(costumes)
+        self._sprite = _PygameSpriteWrapper(costumes)
 
     #############################
     # Properties
@@ -158,8 +165,8 @@ class SpriteBase:
         return self._sprite.dir
 
     @dir.setter
-    def dir(self, dir: float):
-        self._sprite.dir = dir
+    def dir(self, d: float):
+        self._sprite.dir = d
 
     @property
     def costume_name(self) -> str:
@@ -208,6 +215,9 @@ class SpriteBase:
 
     def next_costume(self):
         self._sprite.next_costume()
+
+    def is_touching(self, other: type):
+        return pygame.sprite.collide_mask(self._sprite, sprite(other)._sprite)
 
 
 #########################################
@@ -265,9 +275,15 @@ def _scratch_make_async(f: Callable[[Sprite, ...], None]) -> Callable[[Sprite, .
     This code should only be called while setting up a program.
     """
 
+    impl = '____pypurr_impl'
+    genf = '____pypurr_async_def'
+
     # Get source code
     code = inspect.getsource(f)
     code = textwrap.dedent(code)
+
+    # Get module to execute into
+    mod = getattr(f, '__globals__')
 
     # Skip first decorator
     # TODO: handle multiline decorators!
@@ -275,23 +291,32 @@ def _scratch_make_async(f: Callable[[Sprite, ...], None]) -> Callable[[Sprite, .
         code_first_eol = code.find('\n')
         code = code[code_first_eol:]
 
-    # Get import name
-    import_name      = os.path.basename(__file__)
-    import_name, ext = os.path.splitext(import_name)
+    # Patch to include implementation
+    if not impl in mod:
+        import_name      = os.path.basename(__file__)
+        import_name, ext = os.path.splitext(import_name)
+
+        code = f'import {import_name} as {impl}\n' + code
 
     # Patch to include blocking loops
-    code = f'import {import_name} as __IMPL__' + code
-    code = re.sub(r'(?<=while)\s+(.+)(?=:)', r'(__IMPL__._scratch_block_bool(\1))', code)
+    code = re.sub(r'(?<=while)\s+(.+)(?=:)', fr'({impl}._scratch_block_bool(\1))', code)
 
-    # Get module to execute into
-    mod = dict(getattr(f, '__globals__'))
+    # Patch to rename function
+    match = re.search(r'def\s+(.+)\(.+\):', code)
+    code = code[:match.start(1)] + genf + code[match.end(1):]
 
     # Execute patched code
     new_code = compile(code, '<async-builder>', 'exec')
     exec(new_code, mod)
 
-    # Extract and return new function
-    new_fn = mod[f.__name__]
+    # Extract and rename new function
+    new_fn = mod[genf]
+    new_fn.__name__ = f.__name__
+
+    # Clean up module
+    del mod[genf]
+
+    # Return function
     return new_fn
 
 
@@ -314,6 +339,10 @@ def when_receive(name: str) -> Callable[[Callable[[Sprite], None]], Hooked]:
         # print(f'Hooking {f} to receive')
         return Hooked(_scratch_make_async(f), _broadcast + name)
     return inner
+
+
+def pypurr_async(f: Callable[[Sprite], None]) -> Callable[[Sprite], None]:
+    return _scratch_make_async(f)
 
 
 def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
@@ -371,18 +400,25 @@ def runtime() -> float:
 #########################################
 # Global User Functions: Mouse
 #########################################
-def mouse_x() -> int:
+def mouse_x() -> float:
     """
     Get the x-position of the mouse in pypurr coordinates
     """
-    return pygame.mouse.get_pos()[0] - size[0] / 2
+    return mouse_pos().x
 
 
-def mouse_y() -> int:
+def mouse_y() -> float:
     """
     Get the y-position of the mouse in pypurr coordinates
     """
-    return pygame.mouse.get_pos()[1] - size[1] / 2
+    return mouse_pos().y
+
+
+def mouse_pos() -> pygame.Vector2:
+    """
+    Get the position of the mouse in pypurr coordinates
+    """
+    return _PygameSpriteWrapper.to_purr_pos(pygame.Vector2(pygame.mouse.get_pos()))
 
 
 #########################################

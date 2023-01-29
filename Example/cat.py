@@ -1,18 +1,31 @@
 from pypurr import *
 
 
-class Cat(Sprite):
+class Center(Sprite):
 
     costumes = ['cat.png', 'cat2.png']
 
     @when_start
     def run(self):
 
-        self.goto(0, 0)
-        self.size = 50
+        self.size = 25
 
         while True:
-            if key_down('space'):
-                self.next_costume()
+            self.pos = mouse_pos()
+            if self.is_touching(Cat):
+                self.costume_index = 0
+            else:
+                self.costume_index = 1
+
+
+class Cat(Sprite):
+
+    costumes = ['cat.png']
+
+    @when_start
+    def run(self):
+
+        self.goto(0, 0)
+        self.size = 25
 
 run()
