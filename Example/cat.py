@@ -1,31 +1,17 @@
-from scratch import *
+from pypurr import *
 
 
 class Cat(Sprite):
 
-    costumes = 'cat.png',
+    costumes = ['cat.png']
 
-    @when_receive('hello')
-    def hello(self):
-        print('Testing!')
-
-    @when_open
-    def run_cat(self):
+    @ when_start
+    def run(self):
 
         self.goto(0, 0)
 
-        grav = 10
-
         while True:
-
-            if grav <= -10:
-                grav = 10
-            else:
-                grav -= 1
-
-            self.change_y(grav)
-
-            self.broadcast('hello')
+            self.turn_left(5)
 
 
-run_scratch()
+run()
