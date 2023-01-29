@@ -1,66 +1,111 @@
 import inspect
+import os
 import random
+import re
+import textwrap
 import threading
 import time
 import pygame
 
 from typing import Any, Callable, SupportsFloat, TypeAlias, Literal
-from pygamewrapper import PygameSpriteWrapper
 from constants import *
 
 
-_main_sync = threading.Event()
-
-
-class BlockManager:
-
-    def __init__(self):
-
-        self.do_block = True
-        self._previous_block_location: set[tuple[str, int]] = set()
+###############################
+# Pygame Interface
+###############################
+class PygameSpriteWrapper(pygame.sprite.Sprite):
 
     @staticmethod
-    def _find_caller() -> tuple[str, int] | None:
-        """
-        Find the identifier for the first caller external to this library.
-        """
+    def to_py_pos(pos: pygame.Vector2) -> pygame.Vector2:
+        return pygame.Vector2(pos.x + size[0] / 2, -pos.y + size[1] / 2)
 
-        frames = inspect.stack()
+    def __init__(self, costumes: list[str]):
 
-        for f in frames:
-            if f.filename != __file__:
-                return f.filename, f.lineno
+        super().__init__()
 
-    def block_this(self):
-        """
-        Block execution based on loops and screen updates.
-        In the future, this might be implemented by patching the calling code directly.
-        """
+        self._costume_map = {c: pygame.image.load(c).convert_alpha() for c in costumes}
 
-        if not self.do_block or threading.current_thread() == threading.main_thread():
-            return
+        self._costume_idx_to_name = {i: costumes[i] for i in range(len(costumes))}
+        self._costume_name_to_idx = {v: k for k, v in self._costume_idx_to_name.items()}
 
-        caller = self._find_caller()
+        self._costume_images = list(self._costume_map.values())
 
-        if caller in self._previous_block_location:
+        self._costume_index = 0
+        self._costume_name = list(self._costume_map.keys())[0]
 
-            self._previous_block_location = set()
+        self._current_costume_image = self._costume_images[self._costume_index]
+        self.image = self._current_costume_image
 
-            _main_sync.wait()
+        self._scale: float = 100
 
-        self._previous_block_location.add(caller)
+        self.pos = pygame.Vector2(0, 0)
+        self.dir: float = 90
 
+        self.rect = self.image.get_rect(center=PygameSpriteWrapper.to_py_pos(self.pos))
 
-def current_blocker() -> BlockManager:
-    return _block_mgr.current
+    @property
+    def scale(self) -> float:
+        return self._scale
 
+    @scale.setter
+    def scale(self, scale: float):
+        if scale > 200:
+            self._scale = 200
+        elif scale < 1:
+            self._scale = 1
+        else:
+            self._scale = scale
 
-def blocking_call():
-    current_blocker().block_this()
+    def next_costume(self):
+        self._costume_index += 1
 
+        if self._costume_index >= self.costume_count:
+            self._costume_index = 0
 
-_block_mgr = threading.local()
+        self.costume_index = self._costume_index
+
+    @property
+    def costume_count(self) -> int:
+        return len(self._costume_images)
+
+    @property
+    def costume_name(self) -> str:
+        return self._costume_name
+
+    @costume_name.setter
+    def costume_name(self, value):
+        if value in self._costume_map:
+            self._costume_name = value
+            self._current_costume_image = self._costume_map[value]
+            self._costume_index = self._costume_name_to_idx[value]
+
+    @property
+    def costume_index(self) -> int:
+        return self._costume_index
+
+    @costume_index.setter
+    def costume_index(self, value: int):
+        if 0 <= value < self.costume_count:
+            self._costume_index = value
+            self._current_costume_image = self._costume_images[value]
+            self._costume_name = self._costume_idx_to_name[value]
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+
+        sz = self._current_costume_image.get_size()
+        scale = pygame.transform.scale(self._current_costume_image,
+                                       (sz[0] * self.scale / 100, sz[1] * self.scale / 100))
+        self.image = pygame.transform.rotate(scale, self.dir - 90)
+
+        self.rect = self.image.get_rect(center=PygameSpriteWrapper.to_py_pos(self.pos))
+
+#########################################
+# User interface
+#########################################
+_main_sync = threading.Event()
 _sprite_tys: list[Any] = []
+_sprites: dict[type, 'Sprite'] = {}
 
 
 class SpriteBase:
@@ -83,7 +128,6 @@ class SpriteBase:
     @pos.setter
     def pos(self, v: pygame.Vector2):
         self._sprite.pos = v
-        blocking_call()
 
     @property
     def x(self) -> float:
@@ -108,7 +152,6 @@ class SpriteBase:
     @size.setter
     def size(self, sz: float):
         self._sprite.scale = sz
-        blocking_call()
 
     @property
     def dir(self) -> float:
@@ -117,7 +160,6 @@ class SpriteBase:
     @dir.setter
     def dir(self, dir: float):
         self._sprite.dir = dir
-        blocking_call()
 
     @property
     def costume_name(self) -> str:
@@ -126,7 +168,6 @@ class SpriteBase:
     @costume_name.setter
     def costume_name(self, value: str):
         self._sprite.costume_name = value
-        blocking_call()
 
     @property
     def costume_index(self) -> int:
@@ -135,7 +176,6 @@ class SpriteBase:
     @costume_index.setter
     def costume_index(self, value: int):
         self._sprite.costume_index = value
-        blocking_call()
 
     @property
     def pygame_sprite(self):
@@ -168,9 +208,11 @@ class SpriteBase:
 
     def next_costume(self):
         self._sprite.next_costume()
-        blocking_call()
 
 
+#########################################
+# User Metaclass
+#########################################
 class SpriteMeta(type):
 
     def __new__(mcs, name: str, bases: tuple[type, ...], dct: dict[str, Any]) -> type:
@@ -201,11 +243,61 @@ class SpriteMeta(type):
 class Sprite(SpriteBase, metaclass=SpriteMeta):
     pass
 
-
+#########################################
+# Internal Representation
+#########################################
 _when_green_flag_clicked = 'on_start'
 _broadcast = 'broadcast.'
 
 
+def _scratch_block_bool(b: bool) -> bool:
+    """
+    A simple function which waits for synchronization, then returns its argument.
+    Used in the code generated by _scratch_make_async
+    """
+    _main_sync.wait()
+    return b
+
+
+def _scratch_make_async(f: Callable[[Sprite, ...], None]) -> Callable[[Sprite, ...], None]:
+    """
+    Modify the source function in order to produce a new function which blocks on loops.
+    This code should only be called while setting up a program.
+    """
+
+    # Get source code
+    code = inspect.getsource(f)
+    code = textwrap.dedent(code)
+
+    # Skip first decorator
+    # TODO: handle multiline decorators!
+    if code.startswith('@'):
+        code_first_eol = code.find('\n')
+        code = code[code_first_eol:]
+
+    # Get import name
+    import_name      = os.path.basename(__file__)
+    import_name, ext = os.path.splitext(import_name)
+
+    # Patch to include blocking loops
+    code = f'import {import_name} as __IMPL__' + code
+    code = re.sub(r'(?<=while)\s+(.+)(?=:)', r'(__IMPL__._scratch_block_bool(\1))', code)
+
+    # Get module to execute into
+    mod = dict(getattr(f, '__globals__'))
+
+    # Execute patched code
+    new_code = compile(code, '<async-builder>', 'exec')
+    exec(new_code, mod)
+
+    # Extract and return new function
+    new_fn = mod[f.__name__]
+    return new_fn
+
+
+#########################################
+# Hooks and Calls
+#########################################
 class Hooked:
     def __init__(self, f: Callable[[Sprite], None], name: str):
         self.func = f
@@ -214,64 +306,88 @@ class Hooked:
 
 def when_start(f: Callable[[Sprite], None]) -> Hooked:
     # print(f'Hooking {f} to start')
-    return Hooked(f, _when_green_flag_clicked)
+    return Hooked(_scratch_make_async(f), _when_green_flag_clicked)
 
 
 def when_receive(name: str) -> Callable[[Callable[[Sprite], None]], Hooked]:
     def inner(f: Callable[[Sprite], None]) -> Hooked:
         # print(f'Hooking {f} to receive')
-        return Hooked(f, _broadcast + name)
+        return Hooked(_scratch_make_async(f), _broadcast + name)
     return inner
 
 
-def synchronous(f: Callable[[Sprite], None]) -> Callable[[Sprite], None]:
-
-    def inner(self: Sprite):
-
-        prev = current_blocker().do_block
-        current_blocker().do_block = False
-
-        f(self)
-
-        current_blocker().do_block = prev
-
-        blocking_call()
-        # ironically, we must block after performing synchronous code to
-        # ensure a valid program state
-
-    return inner
+def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
+    n = threading.Thread(target=lambda: f(s))
+    n.daemon = True
+    n.start()
 
 
-_sprites: dict[type, Sprite] = {}
+def _scratch_call_hook(s: Sprite, n: str):
+    for k in s.hooks[n]:
+        _scratch_call(s, k)
 
 
+#########################################
+# Global User Functions: Basic
+#########################################
 def sprite(t: type) -> Sprite:
+    """
+    Get the sprite of a given type
+    """
     assert issubclass(t, Sprite), 'Type provided to sprite() must be a Sprite type'
     return _sprites[t]
 
 
 def broadcast(n: str):
+    """
+    Broadcasts a message to all receivers
+    """
     for s in _sprites.values():
         if _broadcast + n in s.hooks:
             _scratch_call_hook(s, _broadcast + n)
 
 
 def wait(sec: float):
+    """
+    Waits for the given amount of seconds
+    """
     time.sleep(sec)
 
 
 def pick_random(start: SupportsFloat, end: SupportsFloat) -> float:
+    """
+    Returns a random number between start and end
+    """
     return random.random() * (float(end) - float(start)) + float(start)
 
 
+def runtime() -> float:
+    """
+    Gets the current run-time of the game in seconds
+    """
+    return time.time() - _sys_start_time
+
+
+#########################################
+# Global User Functions: Mouse
+#########################################
 def mouse_x() -> int:
+    """
+    Get the x-position of the mouse in pypurr coordinates
+    """
     return pygame.mouse.get_pos()[0] - size[0] / 2
 
 
 def mouse_y() -> int:
+    """
+    Get the y-position of the mouse in pypurr coordinates
+    """
     return pygame.mouse.get_pos()[1] - size[1] / 2
 
 
+#########################################
+# Global User Functions: Keyboard
+#########################################
 Key: TypeAlias = Literal[
     'a', 'b', 'c', 'd', 'e',
     'f', 'g', 'h', 'i', 'j',
@@ -286,49 +402,30 @@ Key: TypeAlias = Literal[
 
 
 def key_pressed(k: Key) -> bool:
-    blocking_call()
+    """
+    Get if the given key is being pressed or not
+    """
     return k in _keys_down_active
 
 
 def key_down(k: Key) -> bool:
-    blocking_call()
+    """
+    Get if the given key was just pressed or not
+    """
     return k in _keys_just_down_active
 
 
 def key_up(k: Key) -> bool:
-    blocking_call()
+    """
+    Get if the given key was just released or not
+    """
     return k in _keys_just_up_active
 
 
-def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
-
-    def inner():
-        _block_mgr.current = BlockManager()
-        f(s)
-
-    n = threading.Thread(target=inner)
-    n.daemon = True
-    n.start()
-
-
-def _scratch_call_hook(s: Sprite, n: str):
-    for k in s.hooks[n]:
-        _scratch_call(s, k)
-
-
-_clock: pygame.time.Clock
-_sys_start_time: float
-
-_keys_just_down: set[Key] = set()
-_keys_just_up: set[Key] = set()
-_keys_down: set[Key] = set()
-
-_keys_down_active: set[Key] = set()
-_keys_just_down_active: set[Key] = set()
-_keys_just_up_active: set[Key] = set()
-
-
-def pygame_key(k: int) -> Key:
+def _pygame_key(k: int) -> Key:
+    """
+    Convert a pygame key to a corresponding pypurr key
+    """
     match k:
         # Numeric keys
         case pygame.K_0: return '0'
@@ -378,14 +475,35 @@ def pygame_key(k: int) -> Key:
         case pygame.K_DOWN:  return 'down'
 
 
+##################################
+# Main Functionality
+##################################
+_clock: pygame.time.Clock
+_sys_start_time: float
+
+_keys_just_down: set[Key] = set()
+_keys_just_up: set[Key] = set()
+_keys_down: set[Key] = set()
+
+_keys_down_active: set[Key] = set()
+_keys_just_down_active: set[Key] = set()
+_keys_just_up_active: set[Key] = set()
+
+
 def handle_event(ev: pygame.event.Event):
+    """
+    Handle one event
+    """
     if ev.type == pygame.KEYDOWN:
-        _keys_just_down.add(pygame_key(ev.key))
+        _keys_just_down.add(_pygame_key(ev.key))
     elif ev.type == pygame.KEYUP:
-        _keys_just_up.add(pygame_key(ev.key))
+        _keys_just_up.add(_pygame_key(ev.key))
 
 
 def start_events():
+    """
+    Prepare to handle all events
+    """
     global _keys_just_up, _keys_just_down
 
     _keys_just_up = set()
@@ -393,6 +511,9 @@ def start_events():
 
 
 def finalize_events():
+    """
+    Finish up handling of events
+    """
     global _keys_down, _keys_down_active, _keys_just_down_active, _keys_just_up_active
 
     _keys_down.difference_update(_keys_just_up)
@@ -403,16 +524,9 @@ def finalize_events():
     _keys_just_up_active = set(_keys_just_up)
 
 
-def runtime() -> float:
-    """
-    Gets the current run-time of the game in seconds
-    """
-    return time.time() - _sys_start_time
-
-
 def run():
     """
-    Run the scratch project currently loaded in python
+    Run the pypurr project currently loaded
     """
 
     global _sprites, _clock, _sys_start_time
