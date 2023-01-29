@@ -8,25 +8,17 @@ from typing import Any, Callable, SupportsFloat
 from pygamewrapper import PygameSpriteWrapper
 from constants import *
 
-_sprite_tys: list[Any] = []
 
+class BlockManager:
 
-class SpriteBase:
+    def __init__(self):
 
-    def __init__(self, costumes: list[str], sounds: list[str]):
-
-        self.costumes = costumes
-        self.sounds = sounds
-
-        self._sprite = PygameSpriteWrapper(costumes)
-        self._sprite.dir = 90
-
-        self._do_block = True
-        self._has_blocked = False
+        self.do_block = True
         self._previous_block_location: set[tuple[str, int]] = set()
         self._previous_block_time: float = _clock.get_time() / 1000
 
-    def _find_caller(self) -> tuple[str, int] | None:
+    @staticmethod
+    def _find_caller() -> tuple[str, int] | None:
         """
         Find the identifier for the first caller external to this library.
         """
@@ -37,13 +29,13 @@ class SpriteBase:
             if f.filename != __file__:
                 return f.filename, f.lineno
 
-    def _block_call(self):
+    def block_this(self):
         """
         Block execution based on loops and screen updates.
         In the future, this might be implemented by patching the calling code directly.
         """
 
-        if not self._do_block:
+        if not self.do_block:
             return
 
         caller = self._find_caller()
@@ -60,6 +52,28 @@ class SpriteBase:
 
         self._previous_block_location.add(caller)
 
+
+def current_blocker() -> BlockManager:
+    return _block_mgr.current
+
+
+def blocking_call():
+    current_blocker().block_this()
+
+
+_block_mgr = threading.local()
+_sprite_tys: list[Any] = []
+
+
+class SpriteBase:
+
+    def __init__(self, costumes: list[str], sounds: list[str]):
+
+        self.costumes = costumes
+        self.sounds = sounds
+
+        self._sprite = PygameSpriteWrapper(costumes)
+
     #############################
     # Properties
     #############################
@@ -71,7 +85,7 @@ class SpriteBase:
     @pos.setter
     def pos(self, v: pygame.Vector2):
         self._sprite.pos = v
-        self._block_call()
+        blocking_call()
 
     @property
     def x(self) -> float:
@@ -96,7 +110,7 @@ class SpriteBase:
     @size.setter
     def size(self, sz: float):
         self._sprite.scale = sz
-        self._block_call()
+        blocking_call()
 
     @property
     def dir(self) -> float:
@@ -105,7 +119,7 @@ class SpriteBase:
     @dir.setter
     def dir(self, dir: float):
         self._sprite.dir = dir
-        self._block_call()
+        blocking_call()
 
     @property
     def costume_name(self) -> str:
@@ -114,7 +128,16 @@ class SpriteBase:
     @costume_name.setter
     def costume_name(self, value: str):
         self._sprite.costume_name = value
-        self._block_call()
+        blocking_call()
+
+    @property
+    def costume_index(self) -> int:
+        return self._sprite.costume_index
+
+    @costume_index.setter
+    def costume_index(self, value: int):
+        self._sprite.costume_index = value
+        blocking_call()
 
     @property
     def pygame_sprite(self):
@@ -145,6 +168,10 @@ class SpriteBase:
     def turn_right(self, angle: float):
         self.dir += angle
 
+    def next_costume(self):
+        self._sprite.next_costume()
+        blocking_call()
+
 
 class SpriteMeta(type):
 
@@ -157,8 +184,10 @@ class SpriteMeta(type):
         new_ty.hooks = {}
 
         for i in dct.values():
-            if hasattr(i, '_hook'):
-                new_ty.hooks[getattr(i, '_hook')] = getattr(i, '_func')
+            if isinstance(i, Hooked):
+                if i.hook not in new_ty.hooks:
+                    new_ty.hooks[i.hook] = []
+                new_ty.hooks[i.hook].append(i.func)
 
         new_ty.__init__ = lambda s: Sprite.__init__(
             s,
@@ -181,8 +210,8 @@ _broadcast = 'broadcast.'
 
 class Hooked:
     def __init__(self, f: Callable[[Sprite], None], name: str):
-        self._func = f
-        self._hook = name
+        self.func = f
+        self.hook = name
 
 
 def when_start(f: Callable[[Sprite], None]) -> Hooked:
@@ -201,12 +230,12 @@ def synchronous(f: Callable[[Sprite], None]) -> Callable[[Sprite], None]:
 
     def inner(self: Sprite):
 
-        prev = self._do_block
-        self._do_block = False
+        prev = current_blocker().do_block
+        current_blocker().do_block = False
 
         f(self)
 
-        self._do_block = prev
+        current_blocker().do_block = prev
 
     return inner
 
@@ -229,22 +258,24 @@ def wait(sec: float):
     time.sleep(sec)
 
 
-def wait_frame():
-    wait(1 / frame_rate)
-
-
 def pick_random(start: SupportsFloat, end: SupportsFloat) -> float:
     return random.random() * (float(end) - float(start)) + float(start)
 
 
 def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
-    n = threading.Thread(target=f, args=(s,))
+
+    def inner():
+        _block_mgr.current = BlockManager()
+        f(s)
+
+    n = threading.Thread(target=inner)
     n.daemon = True
     n.start()
 
 
 def _scratch_call_hook(s: Sprite, n: str):
-    _scratch_call(s, s.hooks[n])
+    for k in s.hooks[n]:
+        _scratch_call(s, k)
 
 
 _clock: pygame.time.Clock
@@ -277,13 +308,12 @@ def run():
     _clock = pygame.time.Clock()
 
     for t in _sprite_tys:
-        print(f'Creating sprite {t}')
         s: Sprite = t()
         _sprites[t] = s
         sprite_group.add(s.pygame_sprite)
 
     for s in _sprites.values():
-        _scratch_call(s, s.hooks[_when_green_flag_clicked])
+        _scratch_call_hook(s, _when_green_flag_clicked)
 
     while True:
         events = pygame.event.get()
