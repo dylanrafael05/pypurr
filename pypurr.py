@@ -7,7 +7,7 @@ import threading
 import time
 import pygame
 
-from typing import Any, Callable, SupportsFloat, TypeAlias, Literal
+from typing import Any, Callable, SupportsFloat, TypeAlias, Literal, TypeVar, Type
 from constants import *
 
 
@@ -112,17 +112,53 @@ class _PygameSpriteWrapper(pygame.sprite.Sprite):
 #########################################
 _main_sync = threading.Event()
 _sprite_tys: list[Any] = []
-_sprites: dict[type, 'Sprite'] = {}
+_sprites: dict[Type['Sprite'], 'Sprite'] = {}
+_clones: dict[Type['Clone'], list['Clone']] = {}
 
 
-class SpriteBase:
+#########################################
+# User Metaclass
+#########################################
+class SpriteMeta(type):
 
-    def __init__(self, costumes: list[str], sounds: list[str]):
+    def __new__(mcs, name: str, bases: tuple[type, ...], dct: dict[str, Any]) -> type:
+
+        new_ty = super().__new__(mcs, name, bases, dct)
+        if name in ['Sprite', 'Clone']:
+            return new_ty
+
+        new_ty.hooks = {}
+
+        for i in dct.values():
+            if isinstance(i, Hooked):
+                if i.hook not in new_ty.hooks:
+                    new_ty.hooks[i.hook] = []
+                new_ty.hooks[i.hook].append(i.func)
+
+        new_ty.__init__ = lambda s: Sprite.__spr_init__(
+            s,
+            dct['costumes'] if 'costumes' in dct else [],
+            dct['sounds']   if 'sounds'   in dct else []
+        )
+
+        if not issubclass(new_ty, Clone):
+            _sprite_tys.append(new_ty)
+
+        return new_ty
+
+
+class Sprite(metaclass=SpriteMeta):
+
+    def __spr_init__(self, costumes: list[str], sounds: list[str]):
 
         self.costumes = costumes
         self.sounds = sounds
 
         self._sprite = _PygameSpriteWrapper(costumes)
+
+
+    # for type-checking
+    def __init__(self): ...
 
     #############################
     # Properties
@@ -220,44 +256,16 @@ class SpriteBase:
         return pygame.sprite.collide_mask(self._sprite, sprite(other)._sprite)
 
 
-#########################################
-# User Metaclass
-#########################################
-class SpriteMeta(type):
-
-    def __new__(mcs, name: str, bases: tuple[type, ...], dct: dict[str, Any]) -> type:
-
-        new_ty = super().__new__(mcs, name, bases, dct)
-        if name == 'Sprite':
-            return new_ty
-
-        new_ty.hooks = {}
-
-        for i in dct.values():
-            if isinstance(i, Hooked):
-                if i.hook not in new_ty.hooks:
-                    new_ty.hooks[i.hook] = []
-                new_ty.hooks[i.hook].append(i.func)
-
-        new_ty.__init__ = lambda s: Sprite.__init__(
-            s,
-            dct['costumes'] if 'costumes' in dct else [],
-            dct['sounds']   if 'sounds'   in dct else []
-        )
-
-        _sprite_tys.append(new_ty)
-
-        return new_ty
-
-
-class Sprite(SpriteBase, metaclass=SpriteMeta):
+class Clone(Sprite):
     pass
+
 
 #########################################
 # Internal Representation
 #########################################
 _when_green_flag_clicked = 'on_start'
 _broadcast = 'broadcast.'
+_on_clone_start = "on_clone_begin"
 
 
 def _scratch_block_bool(b: bool) -> bool:
@@ -341,6 +349,10 @@ def when_receive(name: str) -> Callable[[Callable[[Sprite], None]], Hooked]:
     return inner
 
 
+def when_clone_start(f: Callable[[Sprite], None]) -> Hooked:
+    return Hooked(_scratch_make_async(f), _on_clone_start)
+
+
 def pypurr_async(f: Callable[[Sprite], None]) -> Callable[[Sprite], None]:
     return _scratch_make_async(f)
 
@@ -352,8 +364,9 @@ def _scratch_call(s: Sprite, f: Callable[[Sprite], None]):
 
 
 def _scratch_call_hook(s: Sprite, n: str):
-    for k in s.hooks[n]:
-        _scratch_call(s, k)
+    if n in s.hooks:
+        for k in s.hooks[n]:
+            _scratch_call(s, k)
 
 
 #########################################
@@ -365,6 +378,41 @@ def sprite(t: type) -> Sprite:
     """
     assert issubclass(t, Sprite), 'Type provided to sprite() must be a Sprite type'
     return _sprites[t]
+
+
+T_clone = TypeVar('T_clone', bound=Clone)
+def clones(t: Type[T_clone]) -> list[T_clone]:
+    """
+    Get all the clones of a given type
+    """
+    assert issubclass(t, Clone), 'Type provided to clones() must be a Clone type'
+    return _clones[t]
+
+
+def summon(t: Type[T_clone]) -> T_clone:
+    """
+    Summon a clone of a given type
+    """
+    assert issubclass(t, Clone), 'Type provided to summon() must be a Clone type'
+
+    c = _summon(t)
+
+    if t not in _clones:
+        _clones[t] = []
+    _clones[t].append(c)
+
+    _scratch_call_hook(c, _on_clone_start)
+
+    return c
+
+
+def delete(c: Clone):
+    """
+    Delete the provided clone
+    """
+
+    _clones[type(c)].remove(c)
+    _spr_group.remove(c.pygame_sprite)
 
 
 def broadcast(n: str):
@@ -517,6 +565,8 @@ def _pygame_key(k: int) -> Key:
 _clock: pygame.time.Clock
 _sys_start_time: float
 
+_spr_group: pygame.sprite.Group
+
 _keys_just_down: set[Key] = set()
 _keys_just_up: set[Key] = set()
 _keys_down: set[Key] = set()
@@ -526,7 +576,7 @@ _keys_just_down_active: set[Key] = set()
 _keys_just_up_active: set[Key] = set()
 
 
-def handle_event(ev: pygame.event.Event):
+def _handle_event(ev: pygame.event.Event):
     """
     Handle one event
     """
@@ -536,7 +586,7 @@ def handle_event(ev: pygame.event.Event):
         _keys_just_up.add(_pygame_key(ev.key))
 
 
-def start_events():
+def _start_events():
     """
     Prepare to handle all events
     """
@@ -546,7 +596,7 @@ def start_events():
     _keys_just_down = set()
 
 
-def finalize_events():
+def _finalize_events():
     """
     Finish up handling of events
     """
@@ -560,12 +610,24 @@ def finalize_events():
     _keys_just_up_active = set(_keys_just_up)
 
 
+T_spr = TypeVar('T_spr', bound=Sprite)
+def _summon(t: Type[T_spr]) -> T_spr:
+    """
+    Spawns in a sprite
+    """
+
+    n = t()
+    _spr_group.add(n.pygame_sprite)
+
+    return n
+
+
 def run():
     """
     Run the pypurr project currently loaded
     """
 
-    global _sprites, _clock, _sys_start_time
+    global _sprites, _clock, _sys_start_time, _spr_group
 
     _sys_start_time = time.time()
 
@@ -574,21 +636,20 @@ def run():
     pygame.display.set_caption('pypurr')
 
     _sprites = {}
-    sprite_group = pygame.sprite.Group()
+    _spr_group = pygame.sprite.Group()
 
     _clock = pygame.time.Clock()
 
     for t in _sprite_tys:
-        s: Sprite = t()
+        s = _summon(t)
         _sprites[t] = s
-        sprite_group.add(s.pygame_sprite)
 
     for s in _sprites.values():
         _scratch_call_hook(s, _when_green_flag_clicked)
 
     while True:
         events = pygame.event.get()
-        start_events()
+        _start_events()
 
         for e in events:
 
@@ -596,16 +657,16 @@ def run():
                 pygame.quit()
                 return
 
-            handle_event(e)
+            _handle_event(e)
 
-        finalize_events()
+        _finalize_events()
 
         _main_sync.set()
         _main_sync.clear()
 
-        sprite_group.update()
+        _spr_group.update()
         screen.fill((0, 0, 0))
-        sprite_group.draw(screen)
+        _spr_group.draw(screen)
 
         pygame.display.update()
 
