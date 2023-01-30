@@ -339,13 +339,13 @@ def _pypurr_make_proc(f: Callable[[Actor, ...], None]) -> Callable[[Actor, ...],
     # language=regexp
     patt: str = \
         r'while((?:[\w\W]|lambda[\w\W]+?:|#[\w\W]*?$|\([\w\W]*\)|\{[\w\W]*}|\[[\w\W]*]|"[\w\W]*"|\'[\w\W]*\'|:=)+?):$'
-    code = re.sub(patt, fr'while ({impl}.{_pypurr_proc_while_impl.__name__}(\1))', code, flags=re.RegexFlag.MULTILINE)
+    code = re.sub(patt, fr'while ({impl}.{_pypurr_proc_while_impl.__name__}(\1)):', code, flags=re.RegexFlag.MULTILINE)
 
     # Patch to rename function
     match = re.search(r'def\s+(.+)\((?:.|\(.*\))+\):', code)
     code = code[:match.start(1)] + genf + code[match.end(1):]
 
-    print(code)
+    # print(code)
 
     # Execute patched code
     new_code = compile(code, '<async-builder>', 'exec')
