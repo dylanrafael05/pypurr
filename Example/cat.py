@@ -21,9 +21,12 @@ class Center(Sprite):
 
         self.size = 25
 
-        while True:
+        while (lambda x: x)(
+            # COMMENT
+            True
+        ):
             self.pos = mouse_pos()
-            if self.is_touching(Cat):
+            if self.is_touching_sprite(Cat):
                 self.costume_index = 0
             else:
                 self.costume_index = 1
