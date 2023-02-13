@@ -1,0 +1,16 @@
+Things to do:
+
+ - switch to using <pyglet>
+
+ - make <@procedure> compensate for returning true, and make it automatically call 'Actor.run'
+ - make <@hook> which hooks to a given string
+
+ - "Sprite" -> "Singleton"
+ - "Clone" -> "Actor"
+
+ - make "Singleton" and "Actor" have general properties (customizeable rendering)
+ - draw order and action order distinct
+
+ - "Singleton" should subclass "Actor"
+
+ - "Sprite" and "Clone" as specific subclasses of Actor / Singleton

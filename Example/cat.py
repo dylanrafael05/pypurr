@@ -1,50 +1,43 @@
-from pypurr import *
+from pypurr.all import *
 
 
-class Rand(Clone):
+class Manager(Image2D, Singleton):
 
-    costumes = ['cat.png']
+    costumes = ['cat2.png']
 
-    @when_clone_start
-    def run(self):
+    def update(self):
 
-        wait(2)
-        delete(self)
+        self.scale = 10
+        self.pos = mouse_pos()
 
-
-class Center(Sprite):
-
-    costumes = ['cat.png', 'cat2.png']
-
-    @when_start
-    def run(self):
-
-        self.size = 25
-
-        while (lambda x: x)(
-            # COMMENT
-            True
-        ):
-            self.pos = mouse_pos()
-            if self.is_touching_sprite(Cat):
-                self.costume_index = 0
-            else:
-                self.costume_index = 1
+        if key_pressed('space'):
+            for i in range(int(pick_random(20, 30))):
+                Particle()
 
 
-class Cat(Sprite):
+class Particle(Image2D):
 
-    costumes = ['cat.png']
+    costumes = ['cat2.png']
 
-    @when_start
-    def run(self):
+    def __init__(self):
+        super().__init__()
+        self.vel: mathpr.Vec2 = mathpr.Vec2(pick_random(-10, 10), pick_random(-10, 10))
+        self.rotvel = pick_random(-2, 2)
 
-        self.goto(0, 0)
-        self.size = 25
+    def start(self):
+        self.pos = mouse_pos()
+        self.scale = 1
 
-        while True:
-            wait(0.5)
-            r = summon(Rand)
-            r.goto(pick_random(-100, 100), pick_random(-100, 100))
+    def update(self):
+        self.vel += mathpr.Vec2(0, -1)
 
-run()
+        self.pos += self.vel * 0.5
+        self.rot += self.rotvel
+
+        if self.y < -500:
+            self.delete()
+
+
+
+
+run_project()
