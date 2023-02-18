@@ -81,6 +81,7 @@ class GameObjectMeta(type):
         if hasattr(new_ty, '__singleton__') and getattr(new_ty, '__singleton__') is True:
             all_singleton_types += [new_ty]
             new_ty.instance = None
+            new_ty.__annotations__['instance'] = new_ty
 
         if hasattr(new_ty, '__type_init__'):
             GameObject.initializers += [getattr(new_ty, '__type_init__')]
@@ -323,9 +324,14 @@ class Sprite2D(Object2D):
         )
         return math.Rect(self.pos - size_vec / 2, self.pos + size_vec / 2)
 
-    def touching(self, other: 'Sprite2D'):
+    def touching(self, other: 'SupportsObject') -> bool:
+        other = gameobject(other)
+        assert isinstance(other, Sprite2D), "Cannot check if a sprite is touching a non-sprite"
+        return (self.rect @ other.rect) is not None
 
-        selfrect, otherrect = self.rect, other.rect
+    def _pixperf_touching(self, other: 'Sprite2D'):
+
+        selfrect, otherrect = self.rect / self.true_scale, other.rect / other.true_scale
         inter = selfrect @ otherrect
 
         if inter:
@@ -333,27 +339,26 @@ class Sprite2D(Object2D):
             selfdata: pg.image.ImageData  = self.sprite.image.get_image_data()
             otherdata: pg.image.ImageData = other.sprite.image.get_image_data()
 
-            selfstride = selfdata.width * 4
-            otherstride = otherdata.width * 4
+            selfd:  bytes = selfdata.get_data('RGBA', selfdata.width*4)
+            otherd: bytes = otherdata.get_data('RGBA', otherdata.width)
 
-            selfd:  bytes = selfdata.get_data('RGBA', selfstride)
-            otherd: bytes = otherdata.get_data('RGBA', otherstride)
+            selfnorm  = inter - selfrect.min
+            othernorm = inter - otherrect.min
 
-            selfnorm  = (inter - selfrect.min).min  / self.true_scale
-            othernorm = (inter - otherrect.min).min / other.true_scale
+            for i in range(round(inter.width)):
+                for j in range(round(inter.height)):
 
-            for i in range(int(inter.width / self.true_scale)):
-                for j in range(int(inter.height / other.true_scale)):
+                    selfx = round(i + selfnorm.min.x)
+                    selfy = round(j + selfnorm.min.y)
 
-                    selfx = int(i + selfnorm.x)
-                    selfy = int(j + selfnorm.y)
+                    otherx = round(i + othernorm.min.x)
+                    othery = round(j + othernorm.min.y)
 
-                    otherx = int(i + othernorm.x)
-                    othery = int(j + othernorm.y)
+                    selfi = (selfx*selfdata.width+selfy)*4+3
+                    otheri = (otherx*otherdata.width+othery)*4+3
 
-                    if selfd[(selfx*selfstride+selfy)*4+3] > 0:
-                        if otherd[(otherx*otherstride+othery)*4+3] > 0:
-                            return True
+                    if selfd[selfi] > 0 and otherd[otheri] > 0:
+                        return True
 
         return False
 
@@ -385,6 +390,15 @@ class Particle2D(Sprite2D):
 
         super().__init__(group=self._group)
 
+
+SupportsObject = Type[OnlyOne] | GameObject
+
+def gameobject(x: SupportsObject, /) -> GameObject:
+    if isinstance(x, GameObject):
+        return x
+    else:
+        assert x.__singleton__, "Cannot get a game object from a non-singleton type"
+        return x.instance
 
 #########################################
 # Procedures and delays

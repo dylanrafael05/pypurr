@@ -51,6 +51,11 @@ class Rect:
     def __matmul__(self, other: 'Rect') -> Optional['Rect']:
         return self.intersection(other)
 
+    def __mul__(self, other: float) -> 'Rect':
+        return Rect(self.min * other, self.max * other)
+    def __truediv__(self, other: float) -> 'Rect':
+        return Rect(self.min / other, self.max / other)
+
     def __contains__(self, other: SupportsVec2) -> bool:
         other = vec2(other)
         return self.min.x <= other.x <= self.max.x and self.min.y <= other.y <= self.max.y
