@@ -1,7 +1,7 @@
 from pypurr.all import *
 
 
-class Manager(Image2D, Singleton):
+class Cat(Sprite2D, OnlyOne):
 
     costumes = ['cat2.png']
 
@@ -11,13 +11,13 @@ class Manager(Image2D, Singleton):
         self.pos = mouse_pos()
 
         if key_pressed('space'):
-            for i in range(int(pick_random(20, 30))):
+            for i in range(int(pick_random(200, 300))):
                 Particle()
 
 
-class Particle(Image2D):
+class Particle(Particle2D):
 
-    costumes = ['cat2.png']
+    costume = 'cat2.png'
 
     def __init__(self):
         super().__init__()

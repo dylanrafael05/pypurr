@@ -5,12 +5,12 @@ Things to do:
  - make <@procedure> compensate for returning true, and make it automatically call 'Actor.run'
  - make <@hook> which hooks to a given string
 
- - "Sprite" -> "Singleton"
+ - "Sprite" -> "OnlyOne"
  - "Clone" -> "Actor"
 
- - make "Singleton" and "Actor" have general properties (customizeable rendering)
+ - make "OnlyOne" and "Actor" have general properties (customizeable rendering)
  - draw order and action order distinct
 
- - "Singleton" should subclass "Actor"
+ - "OnlyOne" should subclass "Actor"
 
- - "Sprite" and "Clone" as specific subclasses of Actor / Singleton
+ - "Sprite" and "Clone" as specific subclasses of Actor / OnlyOne

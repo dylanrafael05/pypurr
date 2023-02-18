@@ -56,7 +56,7 @@ def run_project():
         k()
 
     for k in object.all_singleton_types:
-        k()
+        k.instance = k()
 
     pg.clock.schedule_interval(window.cur.on_frame, 1 / 60)
 

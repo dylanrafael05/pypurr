@@ -1,4 +1,4 @@
-from . import window, mathpr
+from . import window, math
 
 
 def key_pressed(key: str) -> bool:
@@ -37,7 +37,7 @@ def mouse_up(button: str) -> bool:
     return not window.cur.mouse[button]
 
 
-def mouse_pos() -> mathpr.Vec2:
+def mouse_pos() -> math.Vec2:
     return window.cur.mouse_coord
 
 

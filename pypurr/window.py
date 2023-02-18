@@ -1,6 +1,6 @@
 import pyglet as pg
 
-from . import object, mathpr
+from . import object, math
 
 
 cur: 'PypurrWindow'
@@ -28,7 +28,7 @@ class PypurrWindow(pg.window.Window):
         self.key = {}
         self.prev_key = {}
 
-        self.mouse_coord = mathpr.Vec2(0, 0)
+        self.mouse_coord = math.Vec2(0, 0)
 
         self.mouse = {}
         self.prev_mouse = {}
@@ -67,7 +67,7 @@ class PypurrWindow(pg.window.Window):
         self.key[pg.window.key.symbol_string(symbol).lower()] = False
 
     def on_mouse_motion(self, x, y, dx, dy):
-        self.mouse_coord = mathpr.from_screen(x, y)
+        self.mouse_coord = math.from_screen(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
         self.mouse[pg.window.mouse.buttons_string(button).lower()] = True

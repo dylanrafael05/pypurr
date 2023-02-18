@@ -5,7 +5,7 @@ import traceback
 import pyglet as pg
 from typing import Any, ParamSpec, Callable, Concatenate, Generator, Type, TypeVar, Final, Generic, Union
 
-from . import mathpr, window, resource
+from . import math, window, resource
 
 
 class Hooked:
@@ -41,6 +41,7 @@ def start_object(o: 'GameObject'):
 
 
 main_batch = pg.graphics.Batch()
+main_group = pg.graphics.Group()
 
 
 def is_abstract(t):
@@ -79,6 +80,7 @@ class GameObjectMeta(type):
 
         if hasattr(new_ty, '__singleton__') and getattr(new_ty, '__singleton__') is True:
             all_singleton_types += [new_ty]
+            new_ty.instance = None
 
         if hasattr(new_ty, '__type_init__'):
             GameObject.initializers += [getattr(new_ty, '__type_init__')]
@@ -186,10 +188,12 @@ objects_by_type: dict[Type['GameObject'], list['GameObject']] = {}
 all_objects: list['GameObject'] = []
 
 
-class Singleton(GameObject):
+class OnlyOne(GameObject):
 
     __abstract__ = True
     __singleton__ = True
+
+    instance: 'OnlyOne'
 
 
 class Object2D(GameObject):
@@ -202,18 +206,15 @@ class Object2D(GameObject):
 
         self.rot = 90
 
-        self._pos = mathpr.Vec2()
-        self._true_scale = 1
+        self._pos = math.Vec2()
+        self.true_scale = 1
 
     @property
     def pos(self):
         return self._pos
     @pos.setter
-    def pos(self, value: tuple[int|float, int|float] | mathpr.Vec2):
-        if isinstance(value, tuple):
-            self._pos = mathpr.Vec2(value[0], value[1])
-        else:
-            self._pos = value
+    def pos(self, value: math.SupportsVec2):
+        self._pos = math.vec2(value)
 
     @property
     def x(self):
@@ -231,22 +232,21 @@ class Object2D(GameObject):
 
     @property
     def scale(self):
-        return self._true_scale * 100
+        return self.true_scale * 100
     @scale.setter
     def scale(self, value):
-        self._true_scale = value / 100
+        self.true_scale = value / 100
 
     def apply_to(self, obj: pg.text.Label | pg.sprite.Sprite):
         
-        x, y = mathpr.to_screen(self._pos)
-        print(f'{x}, {y}')
+        x, y = math.to_screen(self._pos)
 
         obj.x = x
         obj.y = y
 
         obj.rotation = self.rot + 90
 
-        obj.scale = self._true_scale
+        obj.scale = self.true_scale
 
 
 class Label2D(Object2D):
@@ -255,7 +255,7 @@ class Label2D(Object2D):
 
         super().__init__()
 
-        self.label = pg.text.Label(batch=main_batch)
+        self.label = pg.text.Label(batch=main_batch, group=main_group)
 
         self.text = ""
 
@@ -268,7 +268,7 @@ class Label2D(Object2D):
         self.label.delete()
 
 
-class Image2D(Object2D):
+class Sprite2D(Object2D):
 
     costumes = ()
 
@@ -286,32 +286,104 @@ class Image2D(Object2D):
             i.anchor_x = i.width  // 2
             i.anchor_y = i.height // 2
 
-    def __init__(self):
+    def __init__(self, *, group=None):
 
         super().__init__()
 
-        self.image_idx = 0
+        self.image_num = 0
 
         self.pos = pg.math.Vec2()
         self.dir = 0
         self.scale = 100
 
-        self.sprite = pg.sprite.Sprite(self.images[0], batch=main_batch)
+        group = group or main_group
+
+        self.sprite = pg.sprite.Sprite(self.images[0], batch=main_batch, group=group)
 
 
     def prepare_render(self):
 
-        image: pg.image.AbstractImage = self.images[self.image_idx]
+        image: pg.image.AbstractImage = self.images[self.image_num]
         self.sprite.image = image
 
         self.apply_to(self.sprite)
 
     @property
-    def img_name(self) -> str:
-        return self.img_names[self.image_idx]
-    @img_name.setter
-    def img_name(self, value: str):
-        self.image_idx = self.img_names.index(value)
+    def image_name(self) -> str:
+        return self.img_names[self.image_num]
+    @image_name.setter
+    def image_name(self, value: str):
+        self.image_num = self.img_names.index(value)
+
+    @property
+    def rect(self):
+        size_vec = math.Vec2(
+            self.true_scale * self.sprite.image.width,
+            self.true_scale * self.sprite.image.height
+        )
+        return math.Rect(self.pos - size_vec / 2, self.pos + size_vec / 2)
+
+    def touching(self, other: 'Sprite2D'):
+
+        selfrect, otherrect = self.rect, other.rect
+        inter = selfrect @ otherrect
+
+        if inter:
+
+            selfdata: pg.image.ImageData  = self.sprite.image.get_image_data()
+            otherdata: pg.image.ImageData = other.sprite.image.get_image_data()
+
+            selfstride = selfdata.width * 4
+            otherstride = otherdata.width * 4
+
+            selfd:  bytes = selfdata.get_data('RGBA', selfstride)
+            otherd: bytes = otherdata.get_data('RGBA', otherstride)
+
+            selfnorm  = (inter - selfrect.min).min  / self.true_scale
+            othernorm = (inter - otherrect.min).min / other.true_scale
+
+            for i in range(int(inter.width / self.true_scale)):
+                for j in range(int(inter.height / other.true_scale)):
+
+                    selfx = int(i + selfnorm.x)
+                    selfy = int(j + selfnorm.y)
+
+                    otherx = int(i + othernorm.x)
+                    othery = int(j + othernorm.y)
+
+                    if selfd[(selfx*selfstride+selfy)*4+3] > 0:
+                        if otherd[(otherx*otherstride+othery)*4+3] > 0:
+                            return True
+
+        return False
+
+
+
+
+
+class Particle2D(Sprite2D):
+
+    __abstract__ = True
+
+    costume: str
+
+    _group: pg.graphics.TextureGroup
+
+    @classmethod
+    def __type_init__(cls):
+
+        if not hasattr(cls, 'costume'):
+            raise TypeError(f'{cls.__name__}: particles must have only one costume!')
+
+        cls.costumes = [cls.costume]
+
+        super().__type_init__()
+
+        cls._group = pg.graphics.TextureGroup(cls.images[0], parent=main_group)
+
+    def __init__(self):
+
+        super().__init__(group=self._group)
 
 
 #########################################
@@ -446,17 +518,6 @@ def when_receive(name: str) -> Callable[[Callable[[GameObject], ProcCall]], Hook
 # Object interfaces
 ##############################################
 _T_go = TypeVar('_T_go', bound='GameObject')
-
-
-def singleton(t: Type[_T_go]) -> _T_go:
-    """
-    Get the instance of a singleton type
-    """
-
-    if not t.__singleton__:
-        raise ValueError(f"Cannot get singleton instance of non-singleton type {t.__name__}")
-
-    return objects_by_type[t][0]
 
 
 def objects(t: Type[_T_go]) -> list[_T_go]:
